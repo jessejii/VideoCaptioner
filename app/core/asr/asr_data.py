@@ -272,6 +272,14 @@ class ASRData:
                 f.write("\n".join(result))
         return text
 
+    def to_srt_txt(
+        self,
+        layout: SubtitleLayoutEnum = SubtitleLayoutEnum.ORIGINAL_ON_TOP,
+        save_path=None,
+    ) -> str:
+        """Convert to SRT format but save as .txt file (with timestamps)"""
+        return self.to_srt(layout=layout, save_path=save_path)
+
     def to_srt(
         self,
         layout: SubtitleLayoutEnum = SubtitleLayoutEnum.ORIGINAL_ON_TOP,

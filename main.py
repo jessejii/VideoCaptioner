@@ -55,6 +55,10 @@ if cfg.get(cfg.cache_enabled):
 else:
     disable_cache()
 
+# 初始化代理设置
+from app.core.utils.proxy_utils import init_proxy  # noqa: E402
+init_proxy()
+
 
 # Enable DPI Scale
 if cfg.get(cfg.dpiScale) == "Auto":

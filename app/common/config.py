@@ -7,6 +7,7 @@ from qfluentwidgets import (
     BoolValidator,
     ConfigItem,
     ConfigSerializer,
+    ConfigValidator,
     EnumSerializer,
     FolderValidator,
     OptionsConfigItem,
@@ -53,6 +54,30 @@ class LanguageSerializer(ConfigSerializer):
 
     def deserialize(self, value: str):
         return Language(QLocale(value)) if value != "Auto" else Language.AUTO
+
+
+class PortValidator(ConfigValidator):
+    """端口号验证器"""
+
+    def validate(self, value):
+        """验证端口号是否有效"""
+        try:
+            port = int(value)
+            return 1 <= port <= 65535
+        except (ValueError, TypeError):
+            return False
+
+    def correct(self, value):
+        """修正无效的端口号"""
+        try:
+            port = int(value)
+            if port < 1:
+                return 1
+            if port > 65535:
+                return 65535
+            return port
+        except (ValueError, TypeError):
+            return 7890  # 默认端口
 
 
 class PlatformAwareTranscribeModelValidator(OptionsValidator):
@@ -137,7 +162,7 @@ class Config(QConfig):
         "Translate", "NeedReflectTranslate", False, BoolValidator()
     )
     deeplx_endpoint = ConfigItem("Translate", "DeeplxEndpoint", "")
-    batch_size = RangeConfigItem("Translate", "BatchSize", 5, RangeValidator(5, 50))
+    batch_size = RangeConfigItem("Translate", "BatchSize", 5, RangeValidator(5, 100))
     thread_num = RangeConfigItem("Translate", "ThreadNum", 8, RangeValidator(1, 100))
 
     # ------------------- 转录配置 -------------------
@@ -289,6 +314,19 @@ class Config(QConfig):
 
     # ------------------- 缓存配置 -------------------
     cache_enabled = ConfigItem("Cache", "CacheEnabled", True, BoolValidator())
+
+    # ------------------- 网络代理配置 -------------------
+    proxy_enabled = ConfigItem("Proxy", "ProxyEnabled", False, BoolValidator())
+    proxy_type = OptionsConfigItem(
+        "Proxy",
+        "ProxyType",
+        "HTTP",
+        OptionsValidator(["HTTP", "HTTPS", "SOCKS5"]),
+    )
+    proxy_host = ConfigItem("Proxy", "ProxyHost", "")
+    proxy_port = ConfigItem("Proxy", "ProxyPort", "7890", PortValidator())
+    proxy_username = ConfigItem("Proxy", "ProxyUsername", "")
+    proxy_password = ConfigItem("Proxy", "ProxyPassword", "")
 
 
 cfg = Config()

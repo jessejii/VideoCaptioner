@@ -94,9 +94,24 @@ def get_llm_client() -> OpenAI:
                         "OPENAI_BASE_URL and OPENAI_API_KEY environment variables must be set"
                     )
 
-                _global_client = OpenAI(base_url=base_url, api_key=api_key)
+                # 获取代理配置 - 现在通过环境变量自动生效，无需手动设置
+                _global_client = OpenAI(
+                    base_url=base_url, 
+                    api_key=api_key
+                )
 
     return _global_client
+
+
+def reset_llm_client() -> None:
+    """重置全局 LLM 客户端实例
+    
+    在代理配置更改后调用此函数以重新初始化客户端
+    """
+    global _global_client
+    with _client_lock:
+        _global_client = None
+        logger.info("LLM client has been reset")
 
 
 def before_sleep_log(retry_state: RetryCallState) -> None:

@@ -12,7 +12,7 @@ from app.core.entities import (
     SubtitleTask,
     TranslatorServiceEnum,
 )
-from app.core.llm.check_llm import check_llm_connection
+
 from app.core.optimize.optimize import SubtitleOptimizer
 from app.core.split.split import SubtitleSplitter
 from app.core.translate import (
@@ -52,13 +52,7 @@ class SubtitleThread(QThread):
             and self.task.subtitle_config.api_key
             and self.task.subtitle_config.llm_model
         ):
-            success, message = check_llm_connection(
-                self.task.subtitle_config.base_url,
-                self.task.subtitle_config.api_key,
-                self.task.subtitle_config.llm_model,
-            )
-            if not success:
-                raise Exception(f"{self.tr('LLM API 测试失败: ')}{message or ''}")
+
             # 设置环境变量
             if self.task.subtitle_config.base_url:
                 os.environ["OPENAI_BASE_URL"] = self.task.subtitle_config.base_url
@@ -96,7 +90,7 @@ class SubtitleThread(QThread):
 
             # 验证 LLM 配置
             if self.need_llm(subtitle_config, asr_data):
-                self.progress.emit(2, self.tr("开始验证 LLM 配置..."))
+                self.progress.emit(2, self.tr("正在配置 LLM 环境..."))
                 subtitle_config = self._setup_llm_config()
 
             # 2. 重新断句（对于字词级字幕）
@@ -206,13 +200,33 @@ class SubtitleThread(QThread):
                         logger.info(f"翻译字幕保存到：{save_path}")
 
             # 5. 保存字幕
+            output_path = self.task.output_path or ""
+            
+            # 如果进行了优化，额外保存为 .srt.txt 格式
+            if subtitle_config.need_optimize and output_path:
+                # 生成 .srt.txt 文件路径
+                if output_path.endswith('.srt'):
+                    txt_output_path = output_path + '.txt'
+                else:
+                    # 如果不是 .srt 结尾，在扩展名前添加 .srt.txt
+                    path_obj = Path(output_path)
+                    txt_output_path = str(path_obj.parent / f"{path_obj.stem}.srt.txt")
+                
+                # 保存优化后的字幕为 .srt.txt 格式（包含时间戳）
+                asr_data.to_srt_txt(
+                    save_path=txt_output_path,
+                    layout=subtitle_config.subtitle_layout or SubtitleLayoutEnum.ONLY_TRANSLATE,
+                )
+                logger.info(f"优化后字幕保存为txt格式到: {txt_output_path}")
+            
+            # 保存原格式字幕
             asr_data.save(
-                save_path=self.task.output_path or "",
+                save_path=output_path,
                 ass_style=subtitle_config.subtitle_style or "",
                 layout=subtitle_config.subtitle_layout
                 or SubtitleLayoutEnum.ONLY_TRANSLATE,
             )
-            logger.info(f"字幕保存到 {self.task.output_path}")
+            logger.info(f"字幕保存到 {output_path}")
 
             # 6. 文件移动与清理
             if self.task.need_next_task and self.task.video_path:
@@ -225,6 +239,19 @@ class SubtitleThread(QThread):
                     save_path=str(save_srt_path),
                     layout=subtitle_config.subtitle_layout,
                 )
+                
+                # 如果进行了优化，也保存 .srt.txt 格式到视频目录
+                if subtitle_config.need_optimize:
+                    save_txt_path = (
+                        Path(self.task.video_path).parent
+                        / f"{Path(self.task.video_path).stem}.srt.txt"
+                    )
+                    asr_data.to_srt_txt(
+                        save_path=str(save_txt_path),
+                        layout=subtitle_config.subtitle_layout,
+                    )
+                    logger.info(f"优化后字幕txt格式保存到视频目录: {save_txt_path}")
+                
                 save_ass_path = (
                     Path(self.task.video_path).parent
                     / f"{Path(self.task.video_path).stem}.ass"

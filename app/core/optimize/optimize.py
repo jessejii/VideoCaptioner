@@ -320,7 +320,7 @@ class SubtitleOptimizer:
             # 计算相似度
             matcher = difflib.SequenceMatcher(None, original_cleaned, optimized_cleaned)
             similarity = matcher.ratio()
-            similarity_threshold = 0.3 if count_words(original_text) <= 10 else 0.7
+            similarity_threshold = 0.3 if count_words(original_text) <= 10 else 0.5
 
             # 相似度过低
             if similarity < similarity_threshold:
@@ -333,7 +333,7 @@ class SubtitleOptimizer:
             error_msg = ";\n".join(excessive_changes)
             error_msg += (
                 "\n\nYour optimizations changed the text too much. "
-                "Keep high similarity (≥70% for normal text) by making MINIMAL changes: "
+                "Keep high similarity (≥50% for normal text) by making MINIMAL changes: "
                 "only fix recognition errors and improve clarity, "
                 "but preserve the original wording, length and structure as much as possible."
             )

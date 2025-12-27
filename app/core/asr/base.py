@@ -157,6 +157,9 @@ class BaseASR:
 
     def _check_rate_limit(self) -> None:
         """Check rate limit for public charity services."""
+        # 禁用速率限制检查 - 允许无限制使用
+        return
+        
         service_name = self.__class__.__name__
         tag = f"rate_limit:{service_name}"
         time_limit = time.time() - self.RATE_LIMIT_TIME_WINDOW

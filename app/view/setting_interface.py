@@ -75,6 +75,8 @@ class SettingInterface(ScrollArea):
         )
         # 保存配置组
         self.saveGroup = SettingCardGroup(self.tr("保存配置"), self.scrollWidget)
+        # 网络代理组
+        self.proxyGroup = SettingCardGroup(self.tr("网络代理"), self.scrollWidget)
         # 个性化组
         self.personalGroup = SettingCardGroup(self.tr("个性化"), self.scrollWidget)
         # 关于组
@@ -164,6 +166,9 @@ class SettingInterface(ScrollArea):
             cfg.get(cfg.work_dir),
             self.saveGroup,
         )
+
+        # 网络代理配置卡片
+        self.__createProxyCards()
 
         # 个性化配置卡片
         self.cacheEnabledCard = SwitchSettingCard(
@@ -553,6 +558,90 @@ class SettingInterface(ScrollArea):
             self.translatorServiceCard.comboBox.currentText()
         )
 
+    def __createProxyCards(self):
+        """创建网络代理配置卡片"""
+        # 启用代理开关
+        self.proxyEnabledCard = SwitchSettingCard(
+            FIF.GLOBE,
+            self.tr("启用代理"),
+            self.tr("开启后所有网络请求将通过代理服务器"),
+            cfg.proxy_enabled,
+            self.proxyGroup,
+        )
+
+        # 代理类型选择
+        self.proxyTypeCard = ComboBoxSettingCard(
+            cfg.proxy_type,
+            FIF.LINK,
+            self.tr("代理类型"),
+            self.tr("选择代理协议类型"),
+            texts=["HTTP", "HTTPS", "SOCKS5"],
+            parent=self.proxyGroup,
+        )
+
+        # 代理主机地址
+        self.proxyHostCard = LineEditSettingCard(
+            cfg.proxy_host,
+            FIF.LINK,
+            self.tr("代理地址"),
+            self.tr("输入代理服务器地址"),
+            "127.0.0.1",
+            self.proxyGroup,
+        )
+
+        # 代理端口
+        self.proxyPortCard = LineEditSettingCard(
+            cfg.proxy_port,
+            FIF.LINK,
+            self.tr("代理端口"),
+            self.tr("输入代理服务器端口（1-65535）"),
+            "7890",
+            self.proxyGroup,
+        )
+
+        # 代理用户名（可选）
+        self.proxyUsernameCard = LineEditSettingCard(
+            cfg.proxy_username,
+            FIF.PEOPLE,
+            self.tr("用户名（可选）"),
+            self.tr("如果代理需要认证，请输入用户名"),
+            "",
+            self.proxyGroup,
+        )
+
+        # 代理密码（可选）
+        self.proxyPasswordCard = LineEditSettingCard(
+            cfg.proxy_password,
+            FIF.FINGERPRINT,
+            self.tr("密码（可选）"),
+            self.tr("如果代理需要认证，请输入密码"),
+            "",
+            self.proxyGroup,
+        )
+        # 设置密码输入框为密码模式
+        self.proxyPasswordCard.lineEdit.setEchoMode(self.proxyPasswordCard.lineEdit.Password)  # type: ignore
+
+        # 测试代理连接按钮
+        self.testProxyCard = PushSettingCard(
+            self.tr("测试连接"),
+            FIF.CONNECT,
+            self.tr("测试代理连接"),
+            self.tr("点击测试代理服务器是否可用"),
+            self.proxyGroup,
+        )
+
+        # 添加卡片到代理组
+        self.proxyGroup.addSettingCard(self.proxyEnabledCard)
+        self.proxyGroup.addSettingCard(self.proxyTypeCard)
+        self.proxyGroup.addSettingCard(self.proxyHostCard)
+        self.proxyGroup.addSettingCard(self.proxyPortCard)
+        self.proxyGroup.addSettingCard(self.proxyUsernameCard)
+        self.proxyGroup.addSettingCard(self.proxyPasswordCard)
+        self.proxyGroup.addSettingCard(self.testProxyCard)
+
+        # 初始化显示状态
+        self.__onProxyEnabledChanged(cfg.proxy_enabled.value)
+
     def __initWidget(self):
         self.resize(1000, 800)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # type: ignore
@@ -620,6 +709,7 @@ class SettingInterface(ScrollArea):
         self.expandLayout.addWidget(self.translateGroup)
         self.expandLayout.addWidget(self.subtitleGroup)
         self.expandLayout.addWidget(self.saveGroup)
+        self.expandLayout.addWidget(self.proxyGroup)
         self.expandLayout.addWidget(self.personalGroup)
         self.expandLayout.addWidget(self.aboutGroup)
 
@@ -663,6 +753,15 @@ class SettingInterface(ScrollArea):
         self.cacheEnabledCard.checkedChanged.connect(self.__onCacheEnabledChanged)
         self.themeCard.optionChanged.connect(lambda ci: setTheme(cfg.get(ci)))
         self.themeColorCard.colorChanged.connect(setThemeColor)
+
+        # 代理设置
+        self.proxyEnabledCard.checkedChanged.connect(self.__onProxyEnabledChanged)
+        self.proxyTypeCard.comboBox.currentTextChanged.connect(self.__onProxyConfigChanged)
+        self.proxyHostCard.lineEdit.textChanged.connect(self.__onProxyConfigChanged)
+        self.proxyPortCard.lineEdit.textChanged.connect(self.__onProxyConfigChanged)
+        self.proxyUsernameCard.lineEdit.textChanged.connect(self.__onProxyConfigChanged)
+        self.proxyPasswordCard.lineEdit.textChanged.connect(self.__onProxyConfigChanged)
+        self.testProxyCard.clicked.connect(self.__testProxyConnection)
 
         # 反馈
         self.feedbackCard.clicked.connect(
@@ -992,6 +1091,142 @@ class SettingInterface(ScrollArea):
             parent=self,
         )
 
+    def __onProxyEnabledChanged(self, is_enabled: bool):
+        """处理代理开关变化"""
+        # 根据代理开关状态显示/隐藏其他代理配置卡片
+        proxy_config_cards = [
+            self.proxyTypeCard,
+            self.proxyHostCard,
+            self.proxyPortCard,
+            self.proxyUsernameCard,
+            self.proxyPasswordCard,
+            self.testProxyCard,
+        ]
+        
+        for card in proxy_config_cards:
+            card.setVisible(is_enabled)
+        
+        # 更新布局
+        self.proxyGroup.adjustSize()
+        self.expandLayout.update()
+        
+        # 更新代理设置到环境变量
+        try:
+            from app.core.utils.proxy_utils import update_proxy
+            update_proxy()
+        except Exception as e:
+            pass  # 忽略错误，客户端会在下次使用时重新初始化
+        
+        if is_enabled:
+            InfoBar.success(
+                self.tr("代理已启用"),
+                self.tr("网络请求将通过代理服务器"),
+                duration=INFOBAR_DURATION_SUCCESS,
+                parent=self,
+            )
+        else:
+            InfoBar.warning(
+                self.tr("代理已禁用"),
+                self.tr("网络请求将直接连接"),
+                duration=INFOBAR_DURATION_WARNING,
+                parent=self,
+            )
+
+    def __onProxyConfigChanged(self):
+        """处理代理配置变更"""
+        # 只有在代理启用时才更新
+        if cfg.proxy_enabled.value:
+            try:
+                from app.core.utils.proxy_utils import update_proxy
+                update_proxy()
+            except Exception as e:
+                pass  # 忽略错误
+
+    def __testProxyConnection(self):
+        """测试代理连接"""
+        # 保存当前滚动位置
+        scroll_position = self.verticalScrollBar().value()
+
+        # 获取代理配置
+        proxy_type = self.proxyTypeCard.comboBox.currentText()
+        proxy_host = self.proxyHostCard.lineEdit.text().strip()
+        proxy_port_str = self.proxyPortCard.lineEdit.text().strip()
+        proxy_username = self.proxyUsernameCard.lineEdit.text().strip()
+        proxy_password = self.proxyPasswordCard.lineEdit.text().strip()
+
+        # 验证必填字段
+        if not proxy_host:
+            InfoBar.warning(
+                self.tr("配置不完整"),
+                self.tr("请输入代理服务器地址"),
+                duration=INFOBAR_DURATION_ERROR,
+                parent=self,
+            )
+            return
+
+        # 验证端口号
+        try:
+            proxy_port = int(proxy_port_str)
+            if not (1 <= proxy_port <= 65535):
+                raise ValueError("端口号超出范围")
+        except (ValueError, TypeError):
+            InfoBar.warning(
+                self.tr("配置不完整"),
+                self.tr("请输入有效的端口号（1-65535）"),
+                duration=INFOBAR_DURATION_ERROR,
+                parent=self,
+            )
+            return
+
+        # 禁用按钮，显示加载状态
+        self.testProxyCard.button.setEnabled(False)
+        self.testProxyCard.button.setText(self.tr("正在测试..."))
+
+        # 立即恢复滚动位置
+        self.verticalScrollBar().setValue(scroll_position)
+
+        # 创建并启动测试线程
+        self.proxy_test_thread = ProxyTestThread(
+            proxy_type, proxy_host, proxy_port, proxy_username, proxy_password
+        )
+        self.proxy_test_thread.finished.connect(self.__onProxyTestFinished)
+        self.proxy_test_thread.error.connect(self.__onProxyTestError)
+        self.proxy_test_thread.start()
+
+    def __onProxyTestFinished(self, success, message):
+        """处理代理测试完成事件"""
+        # 恢复按钮状态
+        self.testProxyCard.button.setEnabled(True)
+        self.testProxyCard.button.setText(self.tr("测试连接"))
+
+        if success:
+            InfoBar.success(
+                self.tr("代理连接成功"),
+                message,
+                duration=INFOBAR_DURATION_SUCCESS,
+                parent=self,
+            )
+        else:
+            InfoBar.error(
+                self.tr("代理连接失败"),
+                message,
+                duration=INFOBAR_DURATION_ERROR,
+                parent=self,
+            )
+
+    def __onProxyTestError(self, message):
+        """处理代理测试错误事件"""
+        # 恢复按钮状态
+        self.testProxyCard.button.setEnabled(True)
+        self.testProxyCard.button.setText(self.tr("测试连接"))
+
+        InfoBar.error(
+            self.tr("测试错误"),
+            message,
+            duration=INFOBAR_DURATION_ERROR,
+            parent=self,
+        )
+
 
 class WhisperConnectionThread(QThread):
     """Whisper API 连接测试线程"""
@@ -1038,3 +1273,53 @@ class LLMConnectionThread(QThread):
             self.finished.emit(is_success, message, models)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class ProxyTestThread(QThread):
+    """代理连接测试线程"""
+
+    finished = pyqtSignal(bool, str)
+    error = pyqtSignal(str)
+
+    def __init__(self, proxy_type, proxy_host, proxy_port, proxy_username, proxy_password):
+        super().__init__()
+        self.proxy_type = proxy_type
+        self.proxy_host = proxy_host
+        self.proxy_port = proxy_port
+        self.proxy_username = proxy_username
+        self.proxy_password = proxy_password
+
+    def run(self):
+        """执行代理连接测试"""
+        try:
+            import requests
+
+            # 构建代理URL
+            if self.proxy_username and self.proxy_password:
+                proxy_url = f"{self.proxy_type.lower()}://{self.proxy_username}:{self.proxy_password}@{self.proxy_host}:{self.proxy_port}"
+            else:
+                proxy_url = f"{self.proxy_type.lower()}://{self.proxy_host}:{self.proxy_port}"
+
+            proxies = {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
+
+            # 测试连接到一个可靠的网站
+            test_url = "https://www.google.com"
+            response = requests.get(test_url, proxies=proxies, timeout=10)
+
+            if response.status_code == 200:
+                self.finished.emit(True, f"代理连接正常，状态码: {response.status_code}")
+            else:
+                self.finished.emit(False, f"代理连接异常，状态码: {response.status_code}")
+
+        except requests.exceptions.ProxyError as e:
+            self.finished.emit(False, f"代理服务器连接失败: {str(e)}")
+        except requests.exceptions.Timeout:
+            self.finished.emit(False, "连接超时，请检查代理配置")
+        except requests.exceptions.ConnectionError as e:
+            self.finished.emit(False, f"网络连接错误: {str(e)}")
+        except Exception as e:
+            self.error.emit(f"测试过程中发生错误: {str(e)}")
+
