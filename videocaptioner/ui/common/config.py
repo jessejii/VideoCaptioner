@@ -137,7 +137,7 @@ class Config(QConfig):
         "Translate", "NeedReflectTranslate", False, BoolValidator()
     )
     deeplx_endpoint = ConfigItem("Translate", "DeeplxEndpoint", "")
-    batch_size = RangeConfigItem("Translate", "BatchSize", 10, RangeValidator(5, 50))
+    batch_size = RangeConfigItem("Translate", "BatchSize", 10, RangeValidator(5, 100))
     thread_num = RangeConfigItem("Translate", "ThreadNum", 10, RangeValidator(1, 50))
 
     # ------------------- 转录配置 -------------------
@@ -238,6 +238,7 @@ class Config(QConfig):
         "Subtitle", "MaxWordCountEnglish", 20, RangeValidator(8, 100)
     )
     custom_prompt_text = ConfigItem("Subtitle", "CustomPromptText", "")
+    custom_instructions_text = ConfigItem("Subtitle", "CustomInstructionsText", "")
 
     # ------------------- 字幕合成配置 -------------------
     soft_subtitle = ConfigItem("Video", "SoftSubtitle", False, BoolValidator())
@@ -321,7 +322,7 @@ class Config(QConfig):
 
     # ------------------- 更新配置 -------------------
     checkUpdateAtStartUp = ConfigItem(
-        "Update", "CheckUpdateAtStartUp", True, BoolValidator()
+        "Update", "CheckUpdateAtStartUp", False, BoolValidator()
     )
 
     # ------------------- 缓存配置 -------------------

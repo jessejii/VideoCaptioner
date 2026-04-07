@@ -117,7 +117,14 @@ class TranscriptThread(QThread):
             # 保存字幕文件（根据配置的输出格式）
             output_path = Path(self.task.output_path)
             output_format_enum = self.task.transcribe_config.output_format
-            base_path = output_path.with_suffix("")
+
+            # 移除文件扩展名，获取基础路径（使用 rsplit 只移除最后一个扩展名）
+            output_str = str(output_path)
+            if '.' in output_path.name:
+                # 找到最后一个点的位置，移除扩展名
+                base_path_str = output_str.rsplit('.', 1)[0]
+            else:
+                base_path_str = output_str
 
             # 根据选择的格式导出
             if output_format_enum == TranscribeOutputFormatEnum.ALL:
@@ -135,7 +142,7 @@ class TranscriptThread(QThread):
 
             # 保存字幕文件
             for fmt in formats_to_export:
-                save_path = f"{base_path}.{fmt}"
+                save_path = f"{base_path_str}.{fmt}"
                 asr_data.save(save_path)
                 logger.info("%s 字幕文件已保存到: %s", fmt.upper(), save_path)
 

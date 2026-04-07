@@ -50,7 +50,9 @@ class MainWindow(FluentWindow):
         self.versionThread = QThread()
         self.versionChecker.moveToThread(self.versionThread)
         self.versionThread.started.connect(self.versionChecker.perform_check)
-        self.versionThread.start()
+
+        if cfg.checkUpdateAtStartUp.value:
+            self.versionThread.start()
 
         # 初始化导航界面
         self.initNavigation()
@@ -99,7 +101,7 @@ class MainWindow(FluentWindow):
 
     def initWindow(self):
         """初始化窗口"""
-        self.resize(1050, 800)
+        self.resize(1280, 900)
         self.setMinimumWidth(700)
         self.setWindowIcon(QIcon(str(LOGO_PATH)))
         self.setWindowTitle(self.tr("卡卡字幕助手 -- VideoCaptioner"))

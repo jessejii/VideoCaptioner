@@ -53,7 +53,12 @@ class WhisperAPI(BaseASR):
         self.prompt = prompt
         self.need_word_time_stamp = need_word_time_stamp
 
-        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        self.client = OpenAI(
+            base_url=self.base_url, api_key=self.api_key,
+            default_headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            },
+        )
 
     def _run(
         self, callback: Optional[Callable[[int, str], None]] = None, **kwargs: Any

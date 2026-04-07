@@ -25,6 +25,10 @@ _client_lock = threading.Lock()
 
 logger = setup_logger("llm_client")
 
+_DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+}
+
 
 def normalize_base_url(base_url: str) -> str:
     """Normalize API base URL by ensuring /v1 suffix when needed."""
@@ -68,6 +72,7 @@ def get_llm_client() -> OpenAI:
                 _global_client = OpenAI(
                     base_url=base_url,
                     api_key=api_key,
+                    default_headers=_DEFAULT_HEADERS,
                     http_client=create_logging_http_client(),
                 )
 

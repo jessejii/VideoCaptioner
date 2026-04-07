@@ -39,6 +39,7 @@ class SubtitleOptimizer:
         batch_num: int,
         model: str,
         custom_prompt: str,
+        custom_instructions: str = "",
         update_callback: Optional[Callable] = None,
     ):
         """初始化优化器
@@ -55,6 +56,7 @@ class SubtitleOptimizer:
         self.batch_num = batch_num
         self.model = model
         self.custom_prompt = custom_prompt
+        self.custom_instructions = custom_instructions
         self.update_callback = update_callback
 
         self.is_running = True
@@ -209,8 +211,24 @@ class SubtitleOptimizer:
                 f"\nReference content:\n<reference>{self.custom_prompt}</reference>"
             )
 
+        # 构建系统提示词
+        system_prompt = get_prompt("optimize/subtitle")
+
+        # 如果有自定义 instructions，添加到系统提示词中
+        if self.custom_instructions:
+            # 在 </instructions> 标签前插入自定义 instructions
+            if "</instructions>" in system_prompt:
+                custom_instructions_section = f"\n补充规则：\n{self.custom_instructions}\n"
+                system_prompt = system_prompt.replace(
+                    "</instructions>",
+                    custom_instructions_section + "</instructions>"
+                )
+            else:
+                # 如果没有 </instructions> 标签，直接添加到末尾
+                system_prompt += f"\n补充规则：\n{self.custom_instructions}"
+
         messages = [
-            {"role": "system", "content": get_prompt("optimize/subtitle")},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 

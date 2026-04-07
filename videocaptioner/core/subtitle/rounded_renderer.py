@@ -23,6 +23,18 @@ if TYPE_CHECKING:
 logger = setup_logger("subtitle.rounded")
 
 
+def _check_cuda_available() -> bool:
+    """检查 CUDA 是否可用"""
+    from videocaptioner.core.utils.video_utils import check_cuda_available
+    return check_cuda_available()
+
+
+def _check_amf_available() -> bool:
+    """检查 AMD AMF 是否可用"""
+    from videocaptioner.core.utils.video_utils import check_amf_available
+    return check_amf_available()
+
+
 def _get_video_info(video_path: str) -> Tuple[int, int, float]:
     """获取视频分辨率和时长"""
     result = subprocess.run(
@@ -338,107 +350,135 @@ def render_rounded_video(
     with tempfile.TemporaryDirectory(prefix="rounded_subtitle_") as temp_dir:
         temp_path = Path(temp_dir)
 
-        # 步骤1: 生成All字幕PNG (0-30%)
+        # 检查硬件加速（仅最终批次使用，中间批次用无损编码保质量）
+        use_cuda = _check_cuda_available()
+        use_amf = _check_amf_available()
+        if use_cuda:
+            logger.info("圆角背景渲染：使用 NVIDIA CUDA 硬件加速")
+        elif use_amf:
+            logger.info("圆角背景渲染：使用 AMD AMF 硬件加速")
+
+        # 步骤1: 生成All字幕PNG及concat.txt (0-30%)
         logger.debug(f"Generating subtitle PNGs图片（共{len(asr_data.segments)}个，布局: {layout.value}）")
-        subtitle_frames = []
+        
+        concat_txt_path = temp_path / "concat.txt"
+        blank_png_path = temp_path / "blank.png"
+        
+        # 生成一张全透明空白图片
+        Image.new("RGBA", (width, height), (0, 0, 0, 0)).save(blank_png_path, "PNG")
 
-        for i, seg in enumerate(asr_data.segments):
-            # 根据布局确定主副文本
-            if layout == SubtitleLayoutEnum.ONLY_ORIGINAL:
-                primary, secondary = seg.text, ""
-            elif layout == SubtitleLayoutEnum.ONLY_TRANSLATE:
-                primary, secondary = seg.translated_text or "", ""
-            elif layout == SubtitleLayoutEnum.ORIGINAL_ON_TOP:
-                primary, secondary = seg.text, seg.translated_text or ""
-            else:  # TRANSLATE_ON_TOP
-                primary, secondary = seg.translated_text or "", seg.text
+        with open(concat_txt_path, "w", encoding="utf-8") as f:
+            f.write("ffconcat version 1.0\n")
+            
+            current_time = 0.0
+            for i, seg in enumerate(asr_data.segments):
+                # 根据布局确定主副文本
+                if layout == SubtitleLayoutEnum.ONLY_ORIGINAL:
+                    primary, secondary = seg.text, ""
+                elif layout == SubtitleLayoutEnum.ONLY_TRANSLATE:
+                    primary, secondary = seg.translated_text or "", ""
+                elif layout == SubtitleLayoutEnum.ORIGINAL_ON_TOP:
+                    primary, secondary = seg.text, seg.translated_text or ""
+                else:  # TRANSLATE_ON_TOP
+                    primary, secondary = seg.translated_text or "", seg.text
 
-            # 渲染字幕图片
-            img = render_subtitle_image(primary, secondary, width, height, style)
-            png_path = temp_path / f"subtitle_{i:06d}.png"
-            img.save(png_path, "PNG")
+                # 渲染字幕图片
+                img = render_subtitle_image(primary, secondary, width, height, style)
+                png_path = temp_path / f"subtitle_{i:06d}.png"
+                img.save(png_path, "PNG")
 
-            # 记录时间戳
-            start_time = seg.start_time / 1000.0
-            end_time = seg.end_time / 1000.0
-            subtitle_frames.append((start_time, end_time, png_path))
+                # 记录时间戳
+                start_time = seg.start_time / 1000.0
+                end_time = seg.end_time / 1000.0
+                
+                # 填充空白间隙
+                if start_time > current_time:
+                    f.write(f"file '{blank_png_path.as_posix()}'\n")
+                    f.write(f"duration {start_time - current_time:.3f}\n")
+                
+                # 字幕保持时间
+                f.write(f"file '{png_path.as_posix()}'\n")
+                f.write(f"duration {end_time - start_time:.3f}\n")
+                
+                current_time = end_time
 
-            # 进度回调
-            if progress_callback:
-                progress = int((i + 1) / len(asr_data.segments) * 30)
-                progress_callback(progress, f"生成字幕图片 {i + 1}/{len(asr_data.segments)}")
+                # 进度回调
+                if progress_callback:
+                    progress = int((i + 1) / len(asr_data.segments) * 30)
+                    progress_callback(progress, f"生成字幕图片 {i + 1}/{len(asr_data.segments)}")
 
-        if not subtitle_frames:
-            raise ValueError("No valid subtitle images generated")
+            # 填充剩余时间直至视频结束，防止提前失效
+            if current_time < video_duration:
+                f.write(f"file '{blank_png_path.as_posix()}'\n")
+                f.write(f"duration {video_duration - current_time:.3f}\n")
+            
+            # concat demuxer要求最后一行无duration作为结束
+            f.write(f"file '{blank_png_path.as_posix()}'\n")
 
-        # 步骤2: 分批overlay到视频 (30-100%)
-        logger.debug("Overlaying subtitle batches onto video")
-        BATCH_SIZE = 50
-        current_video = video_path
-        total_batches = (len(subtitle_frames) + BATCH_SIZE - 1) // BATCH_SIZE
+        # 步骤2: 单次overlay合成 (30-100%)
+        logger.debug("Overlaying subtitles onto video using concat demuxer")
 
-        for batch_idx in range(total_batches):
-            start_idx = batch_idx * BATCH_SIZE
-            end_idx = min((batch_idx + 1) * BATCH_SIZE, len(subtitle_frames))
-            batch_frames = subtitle_frames[start_idx:end_idx]
+        cmd = [
+            "ffmpeg",
+            "-y",
+        ]
 
-            # 构建overlay滤镜链
-            input_args = ["-i", current_video]
-            filter_parts = []
+        if use_cuda:
+            cmd.extend(["-hwaccel", "cuda"])
+        elif use_amf:
+            cmd.extend(["-hwaccel", "d3d11va"])
 
-            for local_idx, (start, end, png_path) in enumerate(batch_frames):
-                input_args.extend(["-i", str(png_path)])
-                prev = f"[v{local_idx}]" if local_idx > 0 else "[0:v]"
-                curr = f"[{local_idx + 1}:v]"
-                out = f"[v{local_idx + 1}]"
-                filter_parts.append(
-                    f"{prev}{curr}overlay=0:0:enable='between(t,{start},{end})'{out}"
-                )
+        cmd.extend([
+            "-i", video_path,
+            "-f", "concat", "-safe", "0", "-i", str(concat_txt_path),
+            "-filter_complex", "[0:v][1:v]overlay=0:0:shortest=1[outv]",
+            "-map", "[outv]",
+            "-map", "0:a?",
+            "-t", str(video_duration),  # 强制保持原视频时长
+        ])
 
-            filter_complex = ";".join(filter_parts)
-            final_output = f"[v{len(batch_frames)}]"
+        if use_cuda:
+            cmd.extend([
+                "-c:v", "h264_nvenc",
+                "-preset", preset,
+                "-cq", str(crf),
+            ])
+        elif use_amf:
+            quality = "balanced"
+            if "fast" in preset:
+                quality = "speed"
+            elif "slow" in preset:
+                quality = "quality"
+            cmd.extend([
+                "-c:v", "h264_amf",
+                "-quality", quality,
+                "-rc", "cqp",
+                "-qp_i", str(crf),
+                "-qp_p", str(crf),
+                "-qp_b", str(crf),
+            ])
+        else:
+            cmd.extend([
+                "-c:v", "libx264",
+                "-preset", preset,
+                "-crf", str(crf),
+            ])
 
-            # 判断是否是最后一批
-            is_last_batch = batch_idx == total_batches - 1
-            batch_output = (
-                output_path if is_last_batch else temp_path / f"batch_{batch_idx:03d}.mp4"
-            )
+        cmd.extend([
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            str(output_path),
+        ])
 
-            logger.debug(f"Processing batch {batch_idx + 1}/{total_batches}（{len(batch_frames)}个字幕）")
-            # 构建 ffmpeg Command
-            # -t 参数强制保持原视频时长，防止因 overlay ended而截断视频
-            cmd = [
-                "ffmpeg",
-                "-y",
-                *input_args,
-                "-filter_complex",
-                filter_complex,
-                "-map",
-                final_output,
-                "-map",
-                "0:a?",
-                "-t",
-                str(video_duration),  # 强制保持原视频时长
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast" if not is_last_batch else preset,
-                "-crf",
-                "0" if not is_last_batch else str(crf),
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "copy",
-                str(batch_output),
-            ]
+        cmd_str = subprocess.list2cmdline(cmd)
+        logger.debug(f"FFmpeg cmd: {cmd_str}")
 
-            if batch_idx == 0 or is_last_batch:
-                cmd_str = subprocess.list2cmdline(cmd)
-                logger.debug(f"FFmpeg cmd: {cmd_str}")
-
-            result = subprocess.run(
+        process = None
+        try:
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -447,16 +487,62 @@ def render_rounded_video(
                 ),
             )
 
-            if result.returncode != 0:
-                logger.error(f"批次 {batch_idx + 1} 失败: {result.stderr}")
-                raise RuntimeError(f"Subtitle processing failed（批次 {batch_idx + 1}）")
+            # 实时Reading输出并调用回调
+            total_duration = video_duration
+            current_time_proc = 0
+            
+            error_buffer = []
 
-            # 更新进度 (30-100%)
+            while True:
+                output_line = process.stderr.readline()
+                if not output_line and (process.poll() is not None):
+                    break
+                
+                if output_line:
+                    error_buffer.append(output_line.strip())
+                    if len(error_buffer) > 20: 
+                        error_buffer.pop(0)
+
+                if not progress_callback:
+                    continue
+
+                # 解析当前处理时间
+                time_match = re.search(
+                    r"time=(\d{2}):(\d{2}):(\d{2}\.\d{2})", output_line
+                )
+                if time_match:
+                    h, m, s = map(float, time_match.groups())
+                    current_time_proc = h * 3600 + m * 60 + s
+
+                # 计算进度百分比 (30% - 100%)
+                if total_duration > 0:
+                    p = (current_time_proc / total_duration) * 70
+                    progress = 30 + int(p)
+                    progress_callback(min(progress, 99), f"合成视频: 进度 {progress}%")
+
             if progress_callback:
-                progress = 30 + int((batch_idx + 1) / total_batches * 70)
-                progress_callback(progress, f"合成视频 {batch_idx + 1}/{total_batches}")
+                progress_callback(100, "合成完成")
 
-            # 更新当前视频
-            current_video = str(batch_output)
+            # 检查进程的Return code
+            return_code = process.wait()
+            if return_code != 0:
+                error_info = "\n".join(error_buffer)
+                logger.error("FFmpeg overlay rendering failed")
+                logger.error(f"Return code: {return_code}")
+                if error_info:
+                    logger.error(f"Error output:\n{error_info}")
+                raise RuntimeError(f"Subtitle processing failed with return code {return_code}")
+
+        except subprocess.SubprocessError as e:
+            logger.error("FFmpeg process error")
+            logger.error(f"Error: {str(e)}")
+            if process and process.poll() is None:
+                process.kill()
+            raise
+        except Exception as e:
+            logger.error(f"视频合成过程出错: {str(e)}")
+            if process and process.poll() is None:
+                process.kill()
+            raise
 
         logger.debug("Video synthesis complete")

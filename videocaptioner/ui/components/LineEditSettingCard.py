@@ -41,4 +41,4 @@ class LineEditSettingCard(SettingCard):
 
     def setValue(self, value: str):
         qconfig.set(self.configItem, value)
-        self.lineEdit.setText(value)
+        self.lineEdit.setText(str(value))

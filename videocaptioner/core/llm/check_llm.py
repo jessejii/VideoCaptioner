@@ -6,6 +6,10 @@ import openai
 
 from videocaptioner.core.llm.client import normalize_base_url
 
+_DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+}
+
 
 def check_llm_connection(
     base_url: str, api_key: str, model: str
@@ -27,16 +31,32 @@ def check_llm_connection(
         base_url = normalize_base_url(base_url)
         api_key = api_key.strip()
         response = openai.OpenAI(
-            base_url=base_url, api_key=api_key, timeout=60
+            base_url=base_url, api_key=api_key, timeout=60,
+            default_headers=_DEFAULT_HEADERS,
         ).chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": 'Just respond with "Hello"!'},
             ],
+            stream=False,
             timeout=30,
         )
-        return True, response.choices[0].message.content
+
+        if not response or not response.choices:
+            detail = f"（模型: {model}，响应对象: {type(response).__name__}）"
+            if hasattr(response, "model_dump"):
+                detail += f"\n完整响应: {response.model_dump()}"
+            elif hasattr(response, "__dict__"):
+                detail += f"\n响应字段: {vars(response)}"
+            return False, f"API 返回了空响应（choices 为空），请检查模型名称是否正确。{detail}"
+
+        content = response.choices[0].message.content
+        if not content:
+            finish_reason = getattr(response.choices[0], "finish_reason", None)
+            return False, f"API 响应内容为空（finish_reason: {finish_reason}，模型: {model}），请检查模型配置。"
+
+        return True, content
     except openai.APIConnectionError:
         return False, "API Connection Error. Please check your network or VPN."
     except openai.RateLimitError as e:
@@ -65,7 +85,8 @@ def get_available_models(base_url: str, api_key: str) -> list[str]:
         base_url = normalize_base_url(base_url)
         # 创建OpenAI客户端并获取模型列表
         models = openai.OpenAI(
-            base_url=base_url, api_key=api_key, timeout=5
+            base_url=base_url, api_key=api_key, timeout=5,
+            default_headers=_DEFAULT_HEADERS,
         ).models.list()
 
         # 去除非文本模型

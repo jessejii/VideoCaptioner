@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import os
 import platform
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from langdetect import LangDetectException, detect
+
+logger = logging.getLogger(__name__)
 
 from ..entities import SubtitleLayoutEnum
 from ..utils.text_utils import is_mainly_cjk
@@ -535,6 +538,16 @@ class ASRData:
             content = file_path_obj.read_text(encoding="gbk")
 
         suffix = file_path_obj.suffix.lower()
+
+        # 检测实际内容格式（有些文件扩展名可能不正确）
+        is_ass_content = 'Dialogue:' in content or 'dialogue:' in content
+
+        # 如果扩展名是 ASS 但内容不是标准 ASS 格式，尝试 SRT 解析
+        if suffix == ".ass" and not is_ass_content:
+            logger.warning(f"[ASRData] 文件扩展名为 .ass 但内容不是标准 ASS 格式，尝试 SRT 解析")
+            result = ASRData.from_srt(content)
+            if result and result.has_data():
+                return result
 
         if suffix == ".srt":
             return ASRData.from_srt(content)

@@ -39,6 +39,12 @@ def _check_cuda_available() -> bool:
     return check_cuda_available()
 
 
+def _check_amf_available() -> bool:
+    """检查 AMD AMF 是否可用"""
+    from videocaptioner.core.utils.video_utils import check_amf_available
+    return check_amf_available()
+
+
 def _scale_ass_style(style_str: str, scale_factor: float) -> str:
     """
     缩放 ASS 样式中的数值参数
@@ -184,11 +190,9 @@ def render_ass_preview(
         output_path = CACHE_PATH / "ass_preview.png"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 处理 ASS 文件路径（Windows 兼容）
-        ass_file_escaped = processed_ass.replace("\\", "/").replace(":", r"\:")
-
-        # 添加内置字体目录支持
-        fonts_dir_escaped = str(FONTS_PATH).replace("\\", "/").replace(":", r"\:")
+        # 处理路径（Windows 兼容）：反斜杠转义冒号 + 单引号包裹值
+        ass_file_posix = processed_ass.replace("\\", "/").replace(":", r"\:")
+        fonts_dir_posix = str(FONTS_PATH).replace("\\", "/").replace(":", r"\:")
 
         cmd = [
             "ffmpeg",
@@ -196,7 +200,7 @@ def render_ass_preview(
             "-i",
             str(bg_path_obj),
             "-vf",
-            f"ass={ass_file_escaped}:fontsdir={fonts_dir_escaped}",
+            f"ass='{ass_file_posix}':fontsdir='{fonts_dir_posix}'",
             "-frames:v",
             "1",
             str(output_path),
@@ -205,6 +209,9 @@ def render_ass_preview(
         result = subprocess.run(
             cmd,
             capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             creationflags=(
                 getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
             ),
@@ -228,6 +235,8 @@ def _get_video_resolution(video_path: str) -> Tuple[int, int]:
         ["ffmpeg", "-i", video_path],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         creationflags=(
             getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         ),
@@ -235,7 +244,8 @@ def _get_video_resolution(video_path: str) -> Tuple[int, int]:
 
     # 从 ffmpeg 输出中解析分辨率
     pattern = r"(\d{2,5})x(\d{2,5})"
-    match = re.search(pattern, result.stderr)
+    stderr = result.stderr or ""
+    match = re.search(pattern, stderr)
     if match:
         return int(match.group(1)), int(match.group(2))
     return 1920, 1080  # 默认返回 1080P
@@ -296,8 +306,8 @@ def render_ass_video(
         # 自动换行处理
         processed_subtitle = auto_wrap_ass_file(temp_ass_path)
 
-        # 转义字幕路径
-        subtitle_path_escaped = Path(processed_subtitle).as_posix().replace(":", r"\:")
+        # 转义字幕路径（反斜杠转义冒号）
+        subtitle_path_posix = Path(processed_subtitle).as_posix().replace(":", r"\:")
 
         # 构建 FFmpeg Command
         vcodec = "libx264"
@@ -305,37 +315,69 @@ def render_ass_video(
             vcodec = "libvpx-vp9"
             logger.debug("WebM format, using libvpx-vp9")
 
-        # 添加内置字体目录支持
-        fonts_dir_escaped = FONTS_PATH.as_posix().replace(":", r"\:")
+        # 添加内置字体目录支持（反斜杠转义冒号）
+        fonts_dir_posix = FONTS_PATH.as_posix().replace(":", r"\:")
 
-        # 统一使用 ass 滤镜
-        vf = f"ass='{subtitle_path_escaped}':fontsdir='{fonts_dir_escaped}'"
+        # 统一使用 ass 滤镜（单引号包裹值 + 反斜杠转义冒号）
+        vf = f"ass='{subtitle_path_posix}':fontsdir='{fonts_dir_posix}'"
 
-        # 检查 CUDA 是否可用
+        # 检查硬件加速
         use_cuda = _check_cuda_available()
+        use_amf = _check_amf_available()
+
         cmd = ["ffmpeg"]
         if use_cuda:
-            logger.debug("Using CUDA acceleration")
+            logger.info("ASS渲染：使用 NVIDIA CUDA 硬件加速")
             cmd.extend(["-hwaccel", "cuda"])
+            vcodec = "h264_nvenc"
+        elif use_amf:
+            logger.info("ASS渲染：使用 AMD AMF 硬件加速（解码: d3d11va, 编码: h264_amf）")
+            cmd.extend(["-hwaccel", "d3d11va"])
+            vcodec = "h264_amf"
 
-        cmd.extend(
-            [
-                "-i",
-                video_path,
-                "-acodec",
-                "copy",
-                "-vcodec",
-                vcodec,
-                "-crf",
-                str(crf),
-                "-preset",
-                preset,
-                "-vf",
-                vf,
-                "-y",
-                output_path,
-            ]
-        )
+        cmd.extend([
+            "-i", video_path,
+            "-acodec", "copy",
+        ])
+
+        # 根据编码器添加不同的编码参数
+        if vcodec == "h264_amf":
+            quality = "balanced"
+            if "fast" in preset:
+                quality = "speed"
+            elif "slow" in preset:
+                quality = "quality"
+            cmd.extend([
+                "-vcodec", vcodec,
+                "-quality", quality,
+                "-rc", "cqp",
+                "-qp_i", str(crf),
+                "-qp_p", str(crf),
+                "-qp_b", str(crf),
+            ])
+        elif vcodec == "libvpx-vp9":
+            cmd.extend([
+                "-vcodec", vcodec,
+                "-crf", str(crf),
+                "-b:v", "0",
+            ])
+        elif vcodec == "h264_nvenc":
+            cmd.extend([
+                "-vcodec", vcodec,
+                "-preset", preset,
+                "-cq", str(crf),
+            ])
+        else:
+            cmd.extend([
+                "-vcodec", vcodec,
+                "-crf", str(crf),
+                "-preset", preset,
+            ])
+
+        cmd.extend([
+            "-vf", vf,
+            "-y", output_path,
+        ])
 
         cmd_str = subprocess.list2cmdline(cmd)
         logger.debug(f"FFmpeg ASS render cmd: {cmd_str}")

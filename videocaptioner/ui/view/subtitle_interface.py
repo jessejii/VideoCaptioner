@@ -202,10 +202,12 @@ class SubtitleInterface(QWidget):
         self.task: Optional[SubtitleTask] = None
         self.subtitle_path: Optional[str] = None
         self.custom_prompt_text: str = cfg.custom_prompt_text.value
+        self.custom_instructions_text: str = cfg.custom_instructions_text.value
         self.setAttribute(Qt.WA_DeleteOnClose)  # type: ignore
         self._init_ui()
         self._setup_signals()
         self._update_prompt_button_style()
+        self._update_instructions_button_style()
         self.set_values()
 
     def _init_ui(self):
@@ -315,9 +317,15 @@ class SubtitleInterface(QWidget):
 
         # 添加文稿提示按钮
         self.prompt_button = Action(
-            FIF.DOCUMENT, self.tr("Prompt"), triggered=self.show_prompt_dialog
+            FIF.DOCUMENT, self.tr("文稿提示"), triggered=self.show_prompt_dialog
         )
         self.command_bar.addAction(self.prompt_button)
+
+        # 添加 Instructions 按钮
+        self.instructions_button = Action(
+            FIF.EDIT, self.tr("系统提示词"), triggered=self.show_instructions_dialog
+        )
+        self.command_bar.addAction(self.instructions_button)
 
         # 添加设置按钮
         self.command_bar.addAction(
@@ -427,6 +435,21 @@ class SubtitleInterface(QWidget):
         else:
             self.prompt_button.setIcon(FIF.DOCUMENT)
 
+    def show_instructions_dialog(self) -> None:
+        dialog = InstructionsDialog(self)
+        if dialog.exec_():
+            self.custom_instructions_text = cfg.custom_instructions_text.value
+            self._update_instructions_button_style()
+
+    def _update_instructions_button_style(self) -> None:
+        if self.custom_instructions_text.strip():
+            green_icon = FIF.EDIT.colored(
+                QColor(76, 255, 165), QColor(76, 255, 165)
+            )
+            self.instructions_button.setIcon(green_icon)
+        else:
+            self.instructions_button.setIcon(FIF.EDIT)
+
     def set_task(self, task: SubtitleTask) -> None:
         """设置任务并更新UI"""
         if hasattr(self, "subtitle_optimization_thread"):
@@ -485,6 +508,9 @@ class SubtitleInterface(QWidget):
         )
         self.subtitle_optimization_thread.set_custom_prompt_text(
             self.custom_prompt_text
+        )
+        self.subtitle_optimization_thread.set_custom_instructions_text(
+            self.custom_instructions_text
         )
         self.subtitle_optimization_thread.start()
         InfoBar.info(
@@ -1027,6 +1053,55 @@ class PromptDialog(MessageBoxBase):
         # 在点击确定按钮时保存提示文本到配置
         prompt_text = self.text_edit.toPlainText()
         cfg.set(cfg.custom_prompt_text, prompt_text)
+
+
+class InstructionsDialog(MessageBoxBase):
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setup_ui()
+        self.setWindowTitle(self.tr("系统提示词"))
+        # 连接按钮点击事件
+        self.yesButton.clicked.connect(self.save_instructions)
+
+    def setup_ui(self) -> None:
+        self.titleLabel = BodyLabel(self.tr("系统提示词"), self)
+
+        # 添加文本编辑框
+        self.text_edit = TextEdit(self)
+        self.text_edit.setPlaceholderText(
+            self.tr(
+                "请输入自定义的 Instructions（在当前 instructions 基础上补充）\n\n"
+                "这些 instructions 将被添加到字幕优化的系统提示词中，用于指导 LLM 如何处理字幕。\n\n"
+                "示例：\n"
+                "1. 保持技术术语的英文原文，不要翻译\n"
+                "2. 统一使用第一人称'我'，不要使用'我们'\n"
+                "3. 将所有的'您'改为'你'\n"
+                "4. 保留代码块中的格式和缩进\n"
+                "5. 数字和单位之间添加空格（如：100 GB）\n\n"
+                "注意：这些 instructions 会补充到默认的 instructions 中，而不是替换它们。"
+            )
+        )
+        self.text_edit.setText(cfg.custom_instructions_text.value)
+
+        self.text_edit.setMinimumWidth(420)
+        self.text_edit.setMinimumHeight(380)
+
+        # 添加到布局
+        self.viewLayout.addWidget(self.titleLabel)
+        self.viewLayout.addWidget(self.text_edit)
+        self.viewLayout.setSpacing(10)
+
+        # 设置按钮文本
+        self.yesButton.setText(self.tr("确定"))
+        self.cancelButton.setText(self.tr("取消"))
+
+    def get_instructions(self) -> str:
+        return self.text_edit.toPlainText()
+
+    def save_instructions(self) -> None:
+        # 在点击确定按钮时保存 instructions 文本到配置
+        instructions_text = self.text_edit.toPlainText()
+        cfg.set(cfg.custom_instructions_text, instructions_text)
 
 
 if __name__ == "__main__":

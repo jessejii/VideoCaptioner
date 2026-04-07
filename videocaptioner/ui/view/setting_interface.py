@@ -249,6 +249,14 @@ class SettingInterface(ScrollArea):
         self.saveGroup.addSettingCard(self.savePathCard)
         self.saveGroup.addSettingCard(self.cacheEnabledCard)
 
+        self.checkUpdateAtStartUpCard = SwitchSettingCard(
+            FIF.SYNC,
+            self.tr("启动时检查更新"),
+            self.tr("开启时软件启动会自动检查新版本和公告"),
+            cfg.checkUpdateAtStartUp,
+            self.personalGroup,
+        )
+        self.personalGroup.addSettingCard(self.checkUpdateAtStartUpCard)
         self.personalGroup.addSettingCard(self.themeCard)
         self.personalGroup.addSettingCard(self.themeColorCard)
         self.personalGroup.addSettingCard(self.zoomCard)

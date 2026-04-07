@@ -79,6 +79,17 @@ def video2audio(input_file: str, output: str = "", audio_track_index: int = 0) -
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output = str(output_path)
 
+    # 获取视频时长信息
+    video_info = get_video_info(input_file)
+    if video_info and video_info.duration_seconds > 0:
+        hours = int(video_info.duration_seconds // 3600)
+        minutes = int((video_info.duration_seconds % 3600) // 60)
+        seconds = video_info.duration_seconds % 60
+        duration_str = f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
+        logger.info(f"视频时长: {duration_str} ({video_info.duration_seconds:.2f}秒)")
+    else:
+        logger.info("无法获取视频时长")
+
     logger.debug(f"Extracting audio track {audio_track_index}")
     cmd = [
         "ffmpeg",
@@ -91,6 +102,8 @@ def video2audio(input_file: str, output: str = "", audio_track_index: int = 0) -
         "1",  # 单声道
         "-ar",
         "16000",  # 采样率16kHz
+        "-af",
+        "aresample=async=1",  # 音频重采样同步
         "-y",
         output,
     ]
@@ -167,6 +180,30 @@ def check_cuda_available() -> bool:
 
     except Exception as e:
         logger.exception(f"CUDA check error: {str(e)}")
+        return False
+
+
+def check_amf_available() -> bool:
+    """检查AMD AMF是否可用"""
+    logger.info("检查AMD AMF是否可用")
+    try:
+        # 检查ffmpeg是否支持h264_amf编码器
+        result = subprocess.run(
+            ["ffmpeg", "-encoders"],
+            capture_output=True,
+            text=True,
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            ),
+        )
+        if "h264_amf" in result.stdout:
+            logger.info("检测到 h264_amf 编码器")
+            return True
+
+        logger.info("未检测到 h264_amf 编码器")
+        return False
+    except Exception as e:
+        logger.exception(f"检查AMF出错: {str(e)}")
         return False
 
 
@@ -264,30 +301,74 @@ def add_subtitles(
                 vcodec = "libvpx-vp9"
                 logger.debug("WebM format, using libvpx-vp9")
 
-            # 检查CUDA是否可用
+            # 检查硬件加速
             use_cuda = check_cuda_available()
+            use_amf = check_amf_available()
+
             cmd = ["ffmpeg"]
+
+            # 根据编码器构建参数
             if use_cuda:
-                logger.debug("Using CUDA acceleration")
+                logger.info("使用 NVIDIA CUDA 硬件加速")
                 cmd.extend(["-hwaccel", "cuda"])
-            cmd.extend(
-                [
-                    "-i",
-                    input_file,
-                    "-acodec",
-                    "copy",
-                    "-vcodec",
-                    vcodec,
-                    "-crf",
-                    str(crf),
-                    "-preset",
-                    preset,
-                    "-vf",
-                    vf,
-                    "-y",
-                    output,
-                ]
-            )
+                vcodec = "h264_nvenc"
+            elif vcodec != "libvpx-vp9" and use_amf:
+                # AMD AMF 加速：使用 d3d11va 做硬件解码，h264_amf 做硬件编码
+                logger.info("使用 AMD AMF 硬件加速（解码: d3d11va, 编码: h264_amf）")
+                cmd.extend(["-hwaccel", "d3d11va"])
+                vcodec = "h264_amf"
+
+            cmd.extend([
+                "-i", input_file,
+                "-acodec", "copy",
+            ])
+
+            # 根据编码器添加不同的编码参数
+            if vcodec == "h264_amf":
+                # AMF 参数调整：简单映射 preset 到 quality
+                quality = "balanced"
+                if "fast" in preset:
+                    quality = "speed"
+                elif "slow" in preset:
+                    quality = "quality"
+
+                # 修复 AMF 编码文件过大的问题：
+                # h264_amf 默认使用 VBR/CBR 模式，码率很高。
+                # 这里强制使用 CQP (Constant Quantization Parameter) 模式，
+                # 并将 crf 参数作为 QP 值传入，从而获得与 libx264 类似的"恒定质量/体积"效果。
+                cmd.extend([
+                    "-vcodec", vcodec,
+                    "-quality", quality,
+                    "-rc", "cqp",
+                    "-qp_i", str(crf),
+                    "-qp_p", str(crf),
+                    "-qp_b", str(crf),
+                ])
+            elif vcodec == "libvpx-vp9":
+                cmd.extend([
+                    "-vcodec", vcodec,
+                    "-crf", str(crf),
+                    "-b:v", "0",
+                ])
+            elif vcodec == "h264_nvenc":
+                cmd.extend([
+                    "-vcodec", vcodec,
+                    "-preset", preset,
+                    "-cq", str(crf),
+                ])
+            else:
+                # libx264 等软件编码器
+                cmd.extend([
+                    "-vcodec", vcodec,
+                    "-crf", str(crf),
+                    "-preset", preset,
+                ])
+
+            cmd.extend([
+                "-vf", vf,
+                "-y",
+                output,
+            ])
 
             cmd_str = subprocess.list2cmdline(cmd)
             logger.debug(f"FFmpeg hard subtitle cmd: {cmd_str}")

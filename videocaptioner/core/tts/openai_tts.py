@@ -29,6 +29,9 @@ class OpenAITTS(BaseTTS):
         self.client = OpenAI(
             api_key=config.api_key,
             base_url=config.base_url,
+            default_headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            },
         )
 
     def _synthesize(self, segment: TTSDataSeg, output_path: str) -> None:

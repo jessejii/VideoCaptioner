@@ -73,10 +73,13 @@ class SubtitleThread(QThread):
         self.subtitle_length = 0
         self.finished_subtitle_length = 0
         self.custom_prompt_text = ""
+        self.custom_instructions_text = ""
         self.optimizer = None
 
     def set_custom_prompt_text(self, text: str):
         self.custom_prompt_text = text
+    def set_custom_instructions_text(self, text: str):
+            self.custom_instructions_text = text
 
     def _setup_llm_config(self) -> SubtitleConfig:
         """验证 LLM 配置并设置环境变量，返回 SubtitleConfig"""
@@ -161,6 +164,7 @@ class SubtitleThread(QThread):
                     batch_num=subtitle_config.batch_size,
                     model=subtitle_config.llm_model,
                     custom_prompt=custom_prompt or "",
+                    custom_instructions=self.custom_instructions_text or "",
                     update_callback=self.callback,
                 )
                 asr_data = optimizer.optimize_subtitle(asr_data)
