@@ -1,6 +1,7 @@
 """Unified LLM client for the application."""
 
 import os
+import re
 import threading
 from typing import Any, List, Optional
 from urllib.parse import urlparse, urlunparse
@@ -28,6 +29,26 @@ logger = setup_logger("llm_client")
 _DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 }
+
+# 匹配思考过程标签的正则模式，覆盖主流推理模型的输出格式：
+# - DeepSeek-R1: <think ...>...</think >
+# - QwQ: <think ...>...</think ...>
+# - GLM-Z1 等: <think ...>...</think ...>
+_THINK_TAG_PATTERN = re.compile(
+    r"<think\b[^>]*>.*?</think\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def strip_thinking_tags(content: str) -> str:
+    """Remove thinking/reasoning process tags from LLM response content.
+
+    Some reasoning models (e.g. DeepSeek-R1, QwQ, GLM-Z1) wrap their
+    chain-of-thought output in <think ...>...</think ...> tags.  These tags
+    and their contents should be stripped before the response is consumed
+    by downstream business logic (translation, splitting, optimisation, etc.).
+    """
+    return _THINK_TAG_PATTERN.sub("", content).strip()
 
 
 def normalize_base_url(base_url: str) -> str:
@@ -132,5 +153,19 @@ def call_llm(
         and response.choices[0].message.content
     ):
         raise ValueError("Invalid OpenAI API response: empty choices or content")
+
+    # 过滤掉推理模型返回的思考过程标签（如 <think ...>...</think ...>）
+    message = response.choices[0].message
+    original_content = message.content
+    filtered_content = strip_thinking_tags(original_content)
+    if filtered_content != original_content:
+        logger.debug("Stripped thinking tags from LLM response")
+        # 直接修改 message 对象的 content 属性
+        message.content = filtered_content
+        # 如果过滤后内容为空，抛出异常
+        if not filtered_content:
+            raise ValueError(
+                "LLM response content is empty after stripping thinking tags"
+            )
 
     return response

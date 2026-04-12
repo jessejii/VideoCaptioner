@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 import openai
 
-from videocaptioner.core.llm.client import normalize_base_url
+from videocaptioner.core.llm.client import normalize_base_url, strip_thinking_tags
 
 _DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -55,6 +55,9 @@ def check_llm_connection(
         if not content:
             finish_reason = getattr(response.choices[0], "finish_reason", None)
             return False, f"API 响应内容为空（finish_reason: {finish_reason}，模型: {model}），请检查模型配置。"
+
+        # 过滤掉推理模型的思考过程标签
+        content = strip_thinking_tags(content)
 
         return True, content
     except openai.APIConnectionError:
